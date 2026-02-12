@@ -23,6 +23,11 @@ terraform {
   }
 }
 
+# Default AWS provider - uses aws_region variable
+provider "aws" {
+  region = var.aws_region
+}
+
 # for Cloudfront WAF only - must be in us-east-1
 provider "aws" {
   region = "us-east-1"

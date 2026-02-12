@@ -27,6 +27,31 @@
             "Resource": "*",
             "Effect": "Allow",
             "Sid": "XRayTracing"
+        },
+        {
+            "Action": [
+                "ec2:DescribeInstanceTypes",
+                "ec2:DescribeImages"
+            ],
+            "Resource": "*",
+            "Effect": "Allow",
+            "Sid": "EC2ValidatorOps"
+        },
+        {
+            "Action": [
+                "pricing:GetProducts"
+            ],
+            "Resource": "*",
+            "Effect": "Allow",
+            "Sid": "CostEstimatorOps"
+        },
+        {
+            "Action": [
+                "cloudwatch:PutMetricData"
+            ],
+            "Resource": "*",
+            "Effect": "Allow",
+            "Sid": "MetricsEmitterOps"
         }
     ]
 }

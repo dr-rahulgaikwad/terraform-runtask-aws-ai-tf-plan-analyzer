@@ -65,8 +65,6 @@ class PutEventError(Exception):
 
 def lambda_handler(event, _):
     """Terraform run task function"""
-    logger.debug(json.dumps(event))
-
     headers = event.get("headers")
     # Input validation
     try:

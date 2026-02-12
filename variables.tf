@@ -150,5 +150,26 @@ variable "waf_managed_rule_set" {
 variable "bedrock_llm_model" {
   description = "Bedrock LLM model to use (supports cross-region inference profiles)"
   type        = string
-  default     = "global.anthropic.claude-sonnet-4-20250514-v1:0"
+  default     = "anthropic.claude-sonnet-4-5-20250929-v1:0"
+
+  validation {
+    condition     = can(regex("^(us|eu|global|anthropic)\\.", var.bedrock_llm_model))
+    error_message = "Model ID must be a valid Bedrock model identifier (e.g., anthropic.claude-sonnet-4-5-20250929-v1:0)"
+  }
+}
+
+variable "enabled_tools" {
+  description = "Comma-separated list of enabled validation tools"
+  type        = string
+  default     = "EC2Validator,S3Validator,SecurityGroupValidator,CostEstimator"
+}
+
+variable "cost_threshold_percent" {
+  description = "Cost increase threshold percentage for alerts"
+  type        = number
+  default     = 20
+  validation {
+    condition     = var.cost_threshold_percent >= 0 && var.cost_threshold_percent <= 100
+    error_message = "Variable var: cost_threshold_percent must be between 0 and 100"
+  }
 }

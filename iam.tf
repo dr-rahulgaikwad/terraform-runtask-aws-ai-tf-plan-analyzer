@@ -83,7 +83,7 @@ resource "aws_iam_role_policy_attachment" "runtask_fulfillment_bedrock_attachmen
 
 resource "aws_iam_role_policy_attachment" "runtask_fulfillment_additional_attachment" {
   # Customer can add additional permissions
-  count      = length(var.run_task_iam_roles)
+  count      = var.run_task_iam_roles != null ? length(var.run_task_iam_roles) : 0
   role       = aws_iam_role.runtask_fulfillment.name
   policy_arn = var.run_task_iam_roles[count.index]
 }

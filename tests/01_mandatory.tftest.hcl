@@ -4,7 +4,7 @@
 # use tests/*.auto.tfvars to add non-default variables
 
 provider "aws" {
-    region = "us-west-2"
+  region = "us-west-2"
 }
 
 run "mandatory_plan_basic" {

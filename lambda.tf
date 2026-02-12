@@ -179,6 +179,8 @@ resource "aws_lambda_function" "runtask_fulfillment" {
       BEDROCK_LLM_MODEL         = var.bedrock_llm_model
       BEDROCK_GUARDRAIL_ID      = aws_bedrock_guardrail.runtask_fulfillment.guardrail_id
       BEDROCK_GUARDRAIL_VERSION = aws_bedrock_guardrail_version.runtask_fulfillment.version
+      ENABLED_TOOLS             = var.enabled_tools
+      COST_THRESHOLD_PERCENT    = var.cost_threshold_percent
     }
   }
   tags = local.combined_tags

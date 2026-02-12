@@ -81,9 +81,7 @@ def stream_messages(bedrock_client,
     text = ''
     tool_use = {}
 
-    logger.debug(response)
-
-    #stream the response into a message.
+    # Stream the response into a message
     for chunk in response['stream']:
         if 'messageStart' in chunk:
             message['role'] = chunk['messageStart']['role']
@@ -99,8 +97,6 @@ def stream_messages(bedrock_client,
                 tool_use['input'] += delta['toolUse']['input']
             elif 'text' in delta:
                 text += delta['text']
-                if logging.root.level <= logging.INFO:
-                    logger.debug(delta['text'], end='')
         elif 'contentBlockStop' in chunk:
             if 'input' in tool_use:
                 tool_use['input'] = json.loads(tool_use['input'])

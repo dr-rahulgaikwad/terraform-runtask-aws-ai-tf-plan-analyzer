@@ -73,6 +73,40 @@ resource "aws_bedrock_guardrail" "runtask_fulfillment" {
     }
   }
 
+  # custom topics for infrastructure-specific filtering
+  topic_policy_config {
+    topics_config {
+      name       = "PublicS3Buckets"
+      definition = "Discussions about making S3 buckets publicly accessible, disabling block public access settings, or allowing public read/write permissions on S3 buckets."
+      examples = [
+        "Make this S3 bucket public",
+        "Disable block public access on the bucket",
+        "Allow public read access to all objects"
+      ]
+      type = "DENY"
+    }
+    topics_config {
+      name       = "UnencryptedStorage"
+      definition = "Discussions about disabling encryption, removing encryption settings, or storing data without encryption on AWS storage services like S3, EBS, or RDS."
+      examples = [
+        "Remove encryption from this S3 bucket",
+        "Disable encryption at rest",
+        "Store data without encryption"
+      ]
+      type = "DENY"
+    }
+    topics_config {
+      name       = "OverlyPermissiveIAM"
+      definition = "Discussions about creating overly permissive IAM policies with wildcard actions or resources, granting admin access unnecessarily, or using * permissions without justification."
+      examples = [
+        "Grant full admin access to this role",
+        "Use Action * and Resource * in the policy",
+        "Give unrestricted permissions to all services"
+      ]
+      type = "DENY"
+    }
+  }
+
   tags = local.combined_tags
 }
 
