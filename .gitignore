@@ -31,7 +31,8 @@ env/
 .terraform/
 .terraform.lock.hcl
 *.tfvars
-!examples/**/*.tfvars
+*.tfvars.json
+!examples/**/*.tfvars.example
 crash.log
 crash.*.log
 override.tf
@@ -57,6 +58,9 @@ lambda/**/site-packages/
 
 # Logs
 *.log
+
+# Demo guide (local only)
+DEMO_GUIDE.md
 
 # Kiro specs (development only)
 .kiro/

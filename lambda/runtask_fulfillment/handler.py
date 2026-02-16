@@ -6,17 +6,9 @@ import signal
 
 import boto3
 
-import ai
+import ai_simple as ai
 import runtask_utils
-from tools.registry import ToolRegistry
-from tools.ec2_validator import EC2ValidatorTool
-from tools.s3_validator import S3ValidatorTool
-from tools.security_group_validator import SecurityGroupValidatorTool
-from tools.cost_estimator import CostEstimatorTool
-from observability.metrics_emitter import MetricsEmitter
-from observability.structured_logger import StructuredLogger
-from formatters.output_formatter import OutputFormatter
-from utils.error_handling import retry_with_backoff, is_retryable_error
+from utils.error_handling import is_retryable_error
 
 region = os.environ.get("AWS_REGION", None)
 dev_mode = os.environ.get("DEV_MODE", "true")
@@ -27,43 +19,6 @@ logger.setLevel(log_level)
 
 session = boto3.Session()
 cwl_client = session.client('logs')
-
-# Initialize global components
-tool_registry = ToolRegistry()
-metrics_emitter = MetricsEmitter(namespace="TerraformRunTask", region=region)
-output_formatter = OutputFormatter()
-
-# Register all validator tools
-def initialize_tools():
-    """Initialize and register all validator tools."""
-    try:
-        tool_registry.register(EC2ValidatorTool())
-        logger.info("Registered EC2ValidatorTool")
-    except Exception as e:
-        logger.error(f"Failed to register EC2ValidatorTool: {e}")
-    
-    try:
-        tool_registry.register(S3ValidatorTool())
-        logger.info("Registered S3ValidatorTool")
-    except Exception as e:
-        logger.error(f"Failed to register S3ValidatorTool: {e}")
-    
-    try:
-        tool_registry.register(SecurityGroupValidatorTool())
-        logger.info("Registered SecurityGroupValidatorTool")
-    except Exception as e:
-        logger.error(f"Failed to register SecurityGroupValidatorTool: {e}")
-    
-    try:
-        tool_registry.register(CostEstimatorTool())
-        logger.info("Registered CostEstimatorTool")
-    except Exception as e:
-        logger.error(f"Failed to register CostEstimatorTool: {e}")
-    
-    logger.info(f"Tool registry initialized with {len(tool_registry.list_tools())} tools: {tool_registry.list_tools()}")
-
-# Initialize tools on module load
-initialize_tools()
 
 # Timeout handler for Lambda execution
 class TimeoutException(Exception):
@@ -91,7 +46,7 @@ def setup_timeout_handler(context):
 # THIS IS THE MAIN FUNCTION TO IMPLEMENT BUSINESS LOGIC
 # TO PROCESS THE TERRAFORM PLAN FILE or TERRAFORM CONFIG (.tar.gz)
 # SCHEMA - https://developer.hashicorp.com/terraform/cloud-docs/api-docs/run-tasks/run-tasks-integration#severity-and-status-tags
-def process_run_task(type: str, data: str, run_id: str, structured_logger: StructuredLogger):
+def process_run_task(type: str, data: str, run_id: str):
     url = None
     results = []
     status = "passed"
@@ -113,25 +68,14 @@ def process_run_task(type: str, data: str, run_id: str, structured_logger: Struc
 
         elif type == "post_plan":
             # Process the Terraform plan file
+            logger.info(f"Processing post_plan for run_id: {run_id}")
             
-            # Log the run task execution
-            structured_logger.log_run_task(
-                run_id=run_id,
-                organization="unknown",  # Will be populated by lambda_handler
-                workspace="unknown",     # Will be populated by lambda_handler
-                stage=type
-            )
-            
-            # Execute AI analysis with tool registry
-            message, results = ai.eval(data, tool_registry, structured_logger, metrics_emitter)
+            # Execute AI analysis
+            message, results = ai.eval(data)
     
     except TimeoutException as e:
         # Handle Lambda timeout gracefully - return partial results
         logger.warning(f"Lambda execution approaching timeout: {e}")
-        structured_logger.log_error(
-            error_type="TimeoutWarning",
-            error_message="Analysis timed out, returning partial results"
-        )
         
         # Return partial results with timeout indicator
         status = "passed"  # Don't block deployment on timeout
@@ -152,11 +96,6 @@ def process_run_task(type: str, data: str, run_id: str, structured_logger: Struc
         # Check if this is a transient error
         if is_retryable_error(e):
             logger.warning(f"Transient error encountered: {type(e).__name__}: {e}")
-            structured_logger.log_error(
-                error_type=type(e).__name__,
-                error_message=str(e),
-                is_transient=True
-            )
             
             # Return "passed" status for transient errors to avoid blocking deployments
             status = "passed"
@@ -174,18 +113,9 @@ def process_run_task(type: str, data: str, run_id: str, structured_logger: Struc
             # Non-transient error - re-raise to be handled by caller
             raise
     
-    # Emit total run task duration metric
+    # Log execution time
     duration_ms = (time.time() - start_time) * 1000
-    metrics_emitter.emit_duration("RunTaskDuration", duration_ms)
-    structured_logger.log_run_task(
-        run_id=run_id,
-        organization="unknown",
-        workspace="unknown",
-        stage=type,
-        duration_ms=duration_ms,
-        status=status,
-        partial_results=partial_results
-    )
+    logger.info(f"Run task completed in {duration_ms:.2f}ms with status: {status}")
 
     return url, status, message, results
 
@@ -215,9 +145,8 @@ def lambda_handler(event, context):
     except Exception as e:
         logger.warning(f"Could not set up timeout handler: {e}")
     
-    # Initialize structured logger with correlation ID from run_id
+    # Get run_id for logging
     run_id = event.get("payload", {}).get("detail", {}).get("run_id", "unknown")
-    structured_logger = StructuredLogger(correlation_id=run_id)
 
     # Initialize the response object
     runtask_response = {
@@ -241,13 +170,7 @@ def lambda_handler(event, context):
                 "task_result_callback_url"
             ]
             
-            # Update structured logger with organization and workspace info
-            structured_logger.log_run_task(
-                run_id=run_id,
-                organization=organization_name,
-                workspace=workspace_id,
-                stage=event["payload"]["detail"]["stage"]
-            )
+            logger.info(f"Processing run task for org: {organization_name}, workspace: {workspace_id}, run: {run_id}")
 
             # Segment run tasks based on stage
             if event["payload"]["detail"]["stage"] == "pre_plan":
@@ -265,7 +188,7 @@ def lambda_handler(event, context):
 
                 # Run the implemented business logic here
                 url, status, message, results = process_run_task(
-                    type="pre_plan", data=config_file, run_id=run_id, structured_logger=structured_logger
+                    type="pre_plan", data=config_file, run_id=run_id
                 )
 
             elif event["payload"]["detail"]["stage"] == "post_plan":
@@ -282,7 +205,7 @@ def lambda_handler(event, context):
 
                     # Run the implemented business logic here
                     url, status, message, results = process_run_task(
-                        type="post_plan", data=plan_json, run_id=run_id, structured_logger=structured_logger
+                        type="post_plan", data=plan_json, run_id=run_id
                     )
 
                     # Write output to cloudwatch log
@@ -291,12 +214,8 @@ def lambda_handler(event, context):
                         write_run_task_log(run_id, results, cw_log_group_dest)
 
                 if error:
-                    logger.debug(f"{error}")
+                    logger.error(f"Error fetching plan: {error}")
                     message = error
-                    structured_logger.log_error(
-                        error_type="PlanFetchError",
-                        error_message=error
-                    )
 
             runtask_response = {
                 "url": url,
@@ -304,17 +223,51 @@ def lambda_handler(event, context):
                 "message": message,
                 "results": results,
             }
+            
+            # Send callback directly to HCP Terraform (bypass Step Function delay)
+            logger.info("Sending callback directly to HCP Terraform")
+            try:
+                import json
+                from urllib.request import urlopen, Request
+                
+                payload = {
+                    "data": {
+                        "attributes": runtask_response,
+                        "type": "task-results",
+                        "relationships": {
+                            "outcomes": {
+                                "data": results,
+                            }
+                        },
+                    }
+                }
+                
+                headers = {
+                    "Authorization": f"Bearer {access_token}",
+                    "Content-type": "application/vnd.api+json",
+                }
+                
+                request = Request(
+                    task_result_callback_url,
+                    headers=headers,
+                    data=bytes(json.dumps(payload), encoding="utf-8"),
+                    method="PATCH"
+                )
+                
+                with urlopen(request, timeout=10) as response:
+                    logger.info(f"Callback sent successfully: {response.status}")
+                    
+            except Exception as e:
+                logger.error(f"Failed to send callback: {e}")
+                # Still return response for Step Function as fallback
+            
             return runtask_response
 
         else:
             return runtask_response
 
     except Exception as e:
-        logger.error(f"Error: {e}")
-        structured_logger.log_error(
-            error_type=type(e).__name__,
-            error_message=str(e)
-        )
+        logger.error(f"Error: {e}", exc_info=True)
         runtask_response["message"] = (
             "HCP Terraform run task failed, please look into the service logs for more details."
         )

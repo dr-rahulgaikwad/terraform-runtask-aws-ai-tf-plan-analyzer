@@ -6,9 +6,82 @@
 [![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
+> 🎯 **New to this project?** Try our **[Demo Repository](https://github.com/dr-rahulgaikwad/terraform-runtask-demo)** with ready-to-use examples and step-by-step scenarios!
+
 ## Overview
 
 Transform your HashiCorp Cloud Platform (HCP) Terraform workflows with AI-powered infrastructure analysis using Amazon Bedrock. This serverless solution integrates as a Run Task to provide intelligent, actionable insights for every Terraform plan.
+
+## Architecture 
+
+![Architecture Diagram](./images/arch.png)
+
+## Sequence Flow
+
+```mermaid
+sequenceDiagram
+    participant HCP as HCP Terraform
+    participant CF as CloudFront + WAF
+    participant EB as EventBridge Lambda
+    participant SF as Step Functions
+    participant RT as RunTask Lambda
+    participant BR as Amazon Bedrock
+    participant CW as CloudWatch
+
+    HCP->>CF: 1. POST /run-task (HMAC signed)
+    CF->>CF: 2. Validate WAF rules
+    CF->>EB: 3. Forward request
+    EB->>EB: 4. Validate HMAC signature
+    EB->>SF: 5. Start state machine
+    SF->>RT: 6. Invoke fulfillment Lambda
+    
+    Note over RT: Process Terraform Plan
+    RT->>HCP: 7. Fetch plan JSON
+    RT->>BR: 8. Analyze with Claude Sonnet 4.5
+    BR->>BR: 9. Generate 3 sections:<br/>Plan-Summary<br/>Impact-Analysis<br/>AMI-Summary
+    BR->>RT: 10. Return analysis
+    RT->>RT: 11. Apply guardrails
+    RT->>CW: 12. Log metrics & results
+    RT->>HCP: 13. Send callback with results
+    RT->>SF: 14. Return response
+    
+    SF->>HCP: 15. Fallback callback (if needed)
+    HCP->>HCP: 16. Display results in UI
+```
+
+### Component Responsibilities
+
+| Component | Purpose | Key Features |
+|-----------|---------|--------------|
+| **CloudFront + WAF** | Edge security & distribution | Rate limiting, geo-blocking, DDoS protection |
+| **EventBridge Lambda** | Request validation | HMAC signature verification, payload validation |
+| **Step Functions** | Orchestration | Timeout handling, retry logic, fallback callback |
+| **RunTask Lambda** | Core analysis | AI analysis, guardrails, structured output |
+| **Amazon Bedrock** | AI inference | Claude Sonnet 4.5, function calling, streaming |
+| **CloudWatch** | Observability | Metrics, logs, X-Ray tracing |
+
+### Execution Flow Details
+
+1. **Request Ingress** (Steps 1-4)
+   - HCP Terraform sends POST request with HMAC signature
+   - CloudFront validates WAF rules (rate limits, IP filtering)
+   - EventBridge Lambda validates HMAC and payload structure
+
+2. **Orchestration** (Steps 5-6)
+   - Step Functions manages execution with 5-minute timeout
+   - Invokes RunTask Lambda with plan details
+
+3. **AI Analysis** (Steps 7-11)
+   - Fetches Terraform plan JSON from HCP Terraform API
+   - Sends to Bedrock with structured prompt for 3 sections
+   - Applies infrastructure guardrails (PII, security policies)
+   - Formats results with emoji indicators and markdown
+
+4. **Response Delivery** (Steps 12-16)
+   - Logs metrics (execution time, success/failure)
+   - Sends direct callback to HCP Terraform (fast path)
+   - Step Functions provides fallback callback (30s delay)
+   - Results appear in HCP Terraform UI with 3 sections
 
 ### 🎯 Key Features
 
@@ -18,7 +91,7 @@ Transform your HashiCorp Cloud Platform (HCP) Terraform workflows with AI-powere
 - Powered by Claude Sonnet 4.5 via Amazon Bedrock
 ![Example](./images/example.png)
 
-#### 2. **Extensible Validation Framework** ✨ NEW
+#### 2. **Extensible Validation Framework** 
 - **EC2 Validator**: Instance type availability and AMI validation
 - **S3 Validator**: Public access and encryption configuration checks
 - **Security Group Validator**: Overly permissive rule detection
@@ -26,7 +99,7 @@ Transform your HashiCorp Cloud Platform (HCP) Terraform workflows with AI-powere
 - Plugin architecture for easy extension
 ![Example2](./images/example2.png)
 
-#### 3. **Enhanced Output Formatting** ✨ NEW
+#### 3. **Enhanced Output Formatting** 
 - Emoji indicators for severity levels (🔴 Critical, 🟡 Warning, 🟢 OK, 💰 Cost)
 - Markdown tables for cost analysis
 - Grouped findings by category (Security, Cost, Operations)
@@ -41,7 +114,7 @@ Transform your HashiCorp Cloud Platform (HCP) Terraform workflows with AI-powere
   - Overly permissive IAM policy warnings
 ![Example3](./images/example3.png)
 
-#### 5. **Production-Ready Observability** ✨ NEW
+#### 5. **Production-Ready Observability** 
 - CloudWatch metrics for monitoring (execution time, success/failure rates)
 - Structured JSON logging with correlation IDs
 - AWS X-Ray tracing for performance analysis
@@ -103,9 +176,7 @@ This release introduces significant enhancements for production-grade Terraform 
 - Cost increase threshold alerts (configurable)
 - Regional pricing support via AWS Pricing API
 
-## Architecture
 
-![Architecture Diagram](./images/arch.png)
 
 ### Serverless Architecture Components
 
@@ -196,87 +267,80 @@ This solution uses a hub-spoke model designed for deployment in a dedicated AWS 
 
 ## Quick Start
 
+### 🚀 Try the Demo First!
+
+Want to see it in action? Check out our **[Demo Repository](https://github.com/dr-rahulgaikwad/terraform-runtask-demo)** with ready-to-use examples:
+- Pre-configured Terraform code for testing all validators
+- Step-by-step demo scenarios (EC2, S3, Security Groups, Cost Estimation)
+- Sample outputs showing AI analysis and validation results
+
 ### Prerequisites
-- **AWS Account** with Bedrock access
+- **AWS Account** with Bedrock access (Claude Sonnet 4.5 enabled)
 - **HCP Terraform Account** (Terraform Cloud)
 - **Terraform** >= 1.5.0
-- **Python** 3.11+ and Make (for building Lambda packages)
+- **Python** 3.13 and Make (for building Lambda packages)
 - **AWS CLI** configured with credentials
 
 ### Deployment Steps
 
 ```bash
 # 1. Clone and build Lambda packages
-git clone <repository-url>
+git clone https://github.com/aws-ia/terraform-runtask-aws-ai-tf-plan-analyzer
 cd terraform-runtask-aws-ai-tf-plan-analyzer
-make all
+make clean && make build
 
 # 2. Enable Bedrock model access (AWS Console)
-# Navigate to: Amazon Bedrock → Model Access → Enable Claude Sonnet 4.5
+# Navigate to: Amazon Bedrock → Model Access → Enable "Claude Sonnet 4.5"
 
 # 3. Configure Terraform variables
 cat > terraform.tfvars <<EOF
 # Required
 aws_region = "us-east-1"
-hcp_tf_org = "your-organization-name"
+hcp_tf_org = "your-hcp-org-name"
 
-# Optional: Production features
-deploy_waf                    = true
-enabled_tools                 = "EC2Validator,S3Validator,SecurityGroupValidator,CostEstimator"
-cost_threshold_percent        = 20
-lambda_reserved_concurrency   = 10
-cloudwatch_log_group_retention = "365"
-
-# Tags
-tags = {
-  Environment = "production"
-  Project     = "terraform-runtask"
-}
+# Recommended: Enable WAF for production
+deploy_waf = "true"
 EOF
 
 # 4. Deploy infrastructure
 terraform init
-terraform plan
 terraform apply
 
-# 5. Verify deployment
-aws lambda list-functions --query 'Functions[?contains(FunctionName, `runtask`)].FunctionName'
-
-# 6. Configure HCP Terraform Run Task
-# Copy outputs: runtask_url and runtask_hmac
-# Navigate to HCP Terraform → Settings → Run Tasks → Create Run Task
-# - Name: AI Plan Analyzer
-# - Endpoint URL: <runtask_url>
-# - HMAC Key: <runtask_hmac>
-# - Stage: Post-plan
-# - Enforcement: Advisory
-
-# 7. Test with a Terraform plan
-# Make changes in your workspace and run terraform plan
-# View AI analysis in HCP Terraform Run Task output
+# 5. Get outputs for HCP Terraform configuration
+terraform output -raw runtask_url
+terraform output -raw runtask_hmac
 ```
 
-### Post-Deployment Verification
+### Configure HCP Terraform Run Task
+
+1. Navigate to **HCP Terraform** → **Settings** → **Run Tasks** → **Create Run Task**
+2. Configure:
+   - **Name**: `AI Plan Analyzer`
+   - **Endpoint URL**: `<runtask_url from output>`
+   - **HMAC Key**: `<runtask_hmac from output>`
+   - **Stage**: `Post-plan`
+   - **Enforcement Level**: `Advisory`
+3. Click **Create Run Task**
+4. Associate with workspaces or apply organization-wide
+
+### Test the Integration
+
+Use the **[Demo Repository](https://github.com/dr-rahulgaikwad/terraform-runtask-demo)** to test:
 
 ```bash
-# Check Lambda functions
-aws lambda get-function --function-name <prefix>-runtask-fulfillment
+# Clone demo repository
+git clone https://github.com/dr-rahulgaikwad/terraform-runtask-demo
+cd terraform-runtask-demo
 
-# Verify secrets
-aws secretsmanager list-secrets --query 'SecretList[?contains(Name, `runtask`)].Name'
-
-# Monitor logs
-aws logs tail /aws/lambda/<prefix>-runtask-fulfillment --follow
-
-# View metrics
-aws cloudwatch get-metric-statistics \
-  --namespace TerraformRunTask \
-  --metric-name RunTaskDuration \
-  --start-time $(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%S) \
-  --end-time $(date -u +%Y-%m-%dT%H:%M:%S) \
-  --period 300 \
-  --statistics Average
+# Follow the demo scenarios in the README
+# Each scenario demonstrates different validators and AI analysis
 ```
+
+Or test with your own Terraform code:
+1. Make infrastructure changes in any HCP Terraform workspace
+2. Run `terraform plan`
+3. View AI analysis in the Run Task output tab
+4. See validation results with emoji indicators (🔴 🟡 🟢 💰)
 
 ## Configuration
 

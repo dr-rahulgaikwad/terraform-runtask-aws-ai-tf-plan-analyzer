@@ -7,7 +7,7 @@ import botocore
 
 from runtask_utils import generate_runtask_result
 from tools.get_ami_releases import GetECSAmisReleases
-from utils import logger, stream_messages, tool_config
+from bedrock_utils import logger, stream_messages, tool_config
 from utils.error_handling import retry_with_backoff
 import xml.etree.ElementTree as ET
 
@@ -27,18 +27,31 @@ bedrock_client = session.client(
 )
 
 # Input is the terraform plan JSON
-def eval(tf_plan_json, tool_registry=None, structured_logger=None, metrics_emitter=None):
+def eval(tf_plan_json, tool_registry=None, structured_logger=None, metrics_emitter=None, output_formatter=None):
 
     #####################################################################
     ##### First, do generic evaluation of the Terraform plan output #####
     #####################################################################
 
     logger.info("##### Evaluating Terraform plan output #####")
+    
+    # Count resources for summary
+    resource_changes = tf_plan_json.get("resource_changes", [])
+    add_count = sum(1 for r in resource_changes if r.get("change", {}).get("actions") == ["create"])
+    change_count = sum(1 for r in resource_changes if r.get("change", {}).get("actions") == ["update"])
+    delete_count = sum(1 for r in resource_changes if r.get("change", {}).get("actions") == ["delete"])
+    
+    logger.info(f"Resource changes: {add_count} to add, {change_count} to change, {delete_count} to destroy")
+    
     prompt = """
     You must respond with ONLY a JSON object. Do not include any explanatory text, conversation, or markdown formatting.
 
     Analyze the terraform plan and return this exact JSON structure:
-    {"thinking": "brief analysis", "resources": "list of resources being created, modified, or deleted", "impact_analysis": "assessment formatted as markdown with sections: ## 🔍 Impact Analysis\n\n### 🚨 Security Concerns\n- **Critical/High/Medium**: Description\n- **Risk Level**: Assessment\n\n### ⚠️ Configuration Issues\n- **Issue Type**: Description\n- **Impact**: Consequence\n\n### 📊 Operational Impact\n- **Infrastructure**: What's being deployed\n- **Cost**: Cost implications\n\n### 💡 Recommendations\n- **Priority 1**: Most critical fix\n- **Priority 2**: Secondary concerns\n- **Warning**: Important warnings"}
+    {
+        "thinking": "brief analysis", 
+        "resources": "## Plan-Summary\n\n**Networking**\n• List VPCs, subnets, route tables with CIDR blocks\n• Network ACLs and routing details\n\n**Security & Defaults**\n• Security groups with ingress/egress rules (ports, protocols, CIDR)\n• IAM roles and policies\n• Encryption settings\n\n**Compute**\n• EC2 instances (type, AMI ID, availability zone)\n• Auto Scaling groups\n• Launch templates/configurations\n\n**Storage**\n• EBS volumes (size, type, encryption)\n• S3 buckets (versioning, encryption, public access)\n\n**Tags**\n• Common tags applied to resources", 
+        "impact_analysis": "## 🔍 Impact Analysis\n\n### 🚨 Security Concerns\n- **Critical**: List any critical security issues (public S3, overly permissive SGs, unencrypted storage)\n- **High**: High-priority security concerns\n- **Medium**: Medium-priority security concerns\n- **Risk Level**: Overall security risk assessment\n\n### ⚠️ Configuration Issues\n- **Issue Type**: Configuration problems (missing tags, deprecated resources)\n- **Impact**: Consequence of these issues\n\n### 📊 Operational Impact\n- **Infrastructure**: What's being deployed/changed/destroyed\n- **Availability**: Impact on high availability and fault tolerance\n- **Cost**: Estimated cost implications\n\n### 💡 Recommendations\n- **Priority 1**: Most critical fixes needed\n- **Priority 2**: Secondary concerns to address\n- **Best Practices**: AWS best practice recommendations"
+    }
 
     Terraform plan:
     """
@@ -79,39 +92,63 @@ def eval(tf_plan_json, tool_registry=None, structured_logger=None, metrics_emitt
     #####################################################################
     logger.info("##### Running tool orchestration for infrastructure validation #####")
     
-    # Get tool specifications from registry (or fall back to hardcoded config)
+    # Get tool specifications from registry
     if tool_registry is not None:
         dynamic_tool_config = {
             "tools": tool_registry.to_bedrock_spec()
         }
-        logger.info(f"Using dynamic tool registry with {len(dynamic_tool_config['tools'])} tools")
+        logger.info(f"Using tool registry with {len(dynamic_tool_config['tools'])} tools")
     else:
-        # Fallback to hardcoded tool_config for backward compatibility
         dynamic_tool_config = tool_config
-        logger.info("Using hardcoded tool configuration (backward compatibility mode)")
+        logger.info("Using hardcoded tool configuration")
     
+    # Single comprehensive prompt for AMI and infrastructure validation
     prompt = f"""
-    Analyze the Terraform plan and use available tools to validate infrastructure configurations.
+    Analyze this Terraform plan and provide a detailed AMI and infrastructure assessment.
     
-    For EC2 instances: Check instance type availability and AMI release notes
-    For S3 buckets: Validate public access and encryption settings
-    For Security Groups: Check for overly permissive rules
-    For cost analysis: Estimate monthly costs for compute resources
+    Use available tools to:
+    1. **GetECSAmisReleases** - Get AMI release notes and version details for any EC2 AMI IDs found
+    2. **EC2ValidatorTool** - Validate EC2 instance types and availability
+    3. **S3ValidatorTool** - Check S3 bucket encryption and public access
+    4. **SecurityGroupValidatorTool** - Identify overly permissive security group rules
+    5. **CostEstimatorTool** - Estimate monthly costs
+    
+    Format output as:
+    
+    ## AMI-Summary
+    
+    **Current AMIs**
+    • List current AMI IDs being used (if any)
+    • AMI names and descriptions
+    
+    **New/Updated AMIs**
+    • List new AMI IDs being deployed
+    • AMI release notes and version information (use GetECSAmisReleases tool)
+    • Changes from current to new AMI
+    
+    **Validation Results**
+    • EC2 instance type validation results
+    • Security group analysis (overly permissive rules)
+    • S3 bucket security (encryption, public access)
+    • Cost estimates (monthly)
+    
+    **Recommendations**
+    • AMI update recommendations
+    • Security improvements needed
+    • Cost optimization suggestions
     
     Terraform plan: {tf_plan_json["resource_changes"]}
-    
-    Previous analysis: {analysis_response_text}
     """
 
     messages = [{"role": "user", "content": [{"text": prompt}]}]
 
-    # Wrap Bedrock API call with retry logic
+    # Single Bedrock API call with tools
     stop_reason, response = retry_with_backoff(
         lambda: stream_messages(
             bedrock_client=bedrock_client,
             model_id=model_id,
             messages=messages,
-            system_text="Provide direct, technical analysis of infrastructure changes. Use available tools to validate configurations.",
+            system_text="You are an AWS infrastructure analyst. Provide detailed AMI analysis with release notes, security validation, and cost estimates. Use GetECSAmisReleases tool for any AMI IDs found. Be specific with resource details.",
             tool_config=dynamic_tool_config,
         )
     )
@@ -216,14 +253,13 @@ def eval(tf_plan_json, tool_registry=None, structured_logger=None, metrics_emitt
                 # Add the result info to message array
                 messages.append(tool_result_message)
 
-        # Send the messages, including the tool result, to the model.
-        # Wrap Bedrock API call with retry logic
+        # Send tool results back to model
         stop_reason, response = retry_with_backoff(
             lambda: stream_messages(
                 bedrock_client=bedrock_client,
                 model_id=model_id,
                 messages=messages,
-                system_text="Provide direct, technical analysis of infrastructure changes. Use available tools to validate configurations.",
+                system_text="Provide detailed infrastructure analysis with specific resource details. Use tools to validate configurations. Be concise but thorough.",
                 tool_config=dynamic_tool_config,
             )
         )
@@ -247,63 +283,97 @@ def eval(tf_plan_json, tool_registry=None, structured_logger=None, metrics_emitt
         result = "Error: No response received from Bedrock"
         logger.error("No content received from Bedrock")
 
-    #####################################################################
-    ######### Third, generate short summary                     #########
-    #####################################################################
-
-    logger.info("##### Generating short summary #####")
-    prompt = f"""
-    Provide a concise summary of these Terraform changes. Focus on what resources are being created, modified, or deleted:
-
-    {tf_plan_json["resource_changes"]}
-    """
-    message_desc = [{"role": "user", "content": [{"text": prompt}]}]
-    # Wrap Bedrock API call with retry logic
-    stop_reason, response = retry_with_backoff(
-        lambda: stream_messages(
-            bedrock_client=bedrock_client,
-            model_id=model_id,
-            messages=message_desc,
-            system_text="Provide a direct, technical summary without conversational language.",
-            tool_config=None,
-        )
-    )
-
-    # Extract the actual response text from Bedrock
-    if response and "content" in response and len(response["content"]) > 0:
-        description = response["content"][0]["text"]
-    else:
-        description = "Error: No response received from Bedrock"
-        logger.error("No response content received from Bedrock")
-
-    logger.info("##### Report #####")
-    logger.info("Analysis : {}".format(analysis_response_text))
-    logger.info("Impact Analysis: {}".format(impact_analysis_text))
-    logger.info("Tool orchestration summary: {}".format(result))
-    logger.info("Terraform plan summary: {}".format(description))
+    logger.info("##### Analysis Complete #####")
+    logger.info("Tool orchestration result: {}".format(result[:500]))
 
     results = []
 
-    guardrail_status, guardrail_response = guardrail_inspection(str(description))
-    if guardrail_status:
-        results.append(generate_runtask_result(outcome_id="Plan-Summary", description="Summary of Terraform plan", result=description[:9000])) # body max limit of 10,000 chars
+    #####################################################################
+    ##### Create structured multi-section output like original repo #####
+    #####################################################################
+    
+    # Section 1: Plan-Summary (from analysis_response_text)
+    guardrail_status_plan, guardrail_response_plan = guardrail_inspection(str(analysis_response_text))
+    if guardrail_status_plan:
+        results.append({
+            "type": "task-result-outcomes",
+            "attributes": {
+                "outcome-id": "plan-summary",
+                "description": "📋 Plan-Summary",
+                "body": analysis_response_text[:9000],
+                "tags": {
+                    "status": [{"label": "Analyzed", "level": "info"}]
+                }
+            }
+        })
     else:
-        results.append(generate_runtask_result(outcome_id="Plan-Summary", description="Summary of Terraform plan", result="Output omitted due to : {}".format(guardrail_response)))
-        description = "Bedrock guardrail triggered : {}".format(guardrail_response)
-
-    guardrail_status, guardrail_response = guardrail_inspection(str(impact_analysis_text))
-    if guardrail_status:
-        results.append(generate_runtask_result(outcome_id="Impact-Analysis", description="Security and operational impact assessment", result=impact_analysis_text[:9000]))
+        results.append({
+            "type": "task-result-outcomes",
+            "attributes": {
+                "outcome-id": "plan-summary",
+                "description": "📋 Plan-Summary",
+                "body": "Output omitted due to guardrail: {}".format(guardrail_response_plan),
+                "tags": {
+                    "status": [{"label": "Blocked", "level": "warning"}]
+                }
+            }
+        })
+    
+    # Section 2: Impact-Analysis (from impact_analysis_text)
+    guardrail_status_impact, guardrail_response_impact = guardrail_inspection(str(impact_analysis_text))
+    if guardrail_status_impact:
+        results.append({
+            "type": "task-result-outcomes",
+            "attributes": {
+                "outcome-id": "impact-analysis",
+                "description": "🔍 Impact-Analysis",
+                "body": impact_analysis_text[:9000],
+                "tags": {
+                    "status": [{"label": "Analyzed", "level": "info"}]
+                }
+            }
+        })
     else:
-        results.append(generate_runtask_result(outcome_id="Impact-Analysis", description="Security and operational impact assessment", result="Output omitted due to : {}".format(guardrail_response)))
-
-    guardrail_status, guardrail_response = guardrail_inspection(str(result))
-    if guardrail_status:
-        results.append(generate_runtask_result(outcome_id="Validation-Summary", description="Infrastructure validation and tool analysis", result=result[:9000]))
+        results.append({
+            "type": "task-result-outcomes",
+            "attributes": {
+                "outcome-id": "impact-analysis",
+                "description": "🔍 Impact-Analysis",
+                "body": "Output omitted due to guardrail: {}".format(guardrail_response_impact),
+                "tags": {
+                    "status": [{"label": "Blocked", "level": "warning"}]
+                }
+            }
+        })
+    
+    # Section 3: AMI-Summary (from tool orchestration result with AMI details)
+    guardrail_status_ami, guardrail_response_ami = guardrail_inspection(str(result))
+    if guardrail_status_ami:
+        results.append({
+            "type": "task-result-outcomes",
+            "attributes": {
+                "outcome-id": "ami-summary",
+                "description": "🖥️ AMI-Summary",
+                "body": result[:9000],
+                "tags": {
+                    "status": [{"label": "Analyzed", "level": "info"}]
+                }
+            }
+        })
     else:
-        results.append(generate_runtask_result(outcome_id="Validation-Summary", description="Infrastructure validation and tool analysis", result="Output omitted due to : {}".format(guardrail_response)))
+        results.append({
+            "type": "task-result-outcomes",
+            "attributes": {
+                "outcome-id": "ami-summary",
+                "description": "🖥️ AMI-Summary",
+                "body": "Output omitted due to guardrail: {}".format(guardrail_response_ami),
+                "tags": {
+                    "status": [{"label": "Blocked", "level": "warning"}]
+                }
+            }
+        })
 
-    runtask_high_level ="Terraform plan analyzer using Amazon Bedrock, expand the findings below to learn more. Click `view more details` to get the detailed logs"
+    runtask_high_level = "🤖 AI-Powered Terraform Plan Analysis"
     return runtask_high_level, results
 
 def guardrail_inspection(input_text, input_mode = 'OUTPUT'):

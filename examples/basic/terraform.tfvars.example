@@ -1,0 +1,5 @@
+# Example terraform.tfvars file
+# Copy this to terraform.tfvars and fill in your values
+
+hcp_tf_org = "your-hcp-org-name"
+# hcp_tf_token = "your-hcp-terraform-token"  # Optional: Only needed if using TFE provider

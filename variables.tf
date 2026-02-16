@@ -89,7 +89,7 @@ variable "lambda_reserved_concurrency" {
 variable "lambda_default_timeout" {
   description = "Lambda default timeout in seconds"
   type        = number
-  default     = 300
+  default     = 900
 }
 
 variable "lambda_architecture" {
@@ -150,11 +150,11 @@ variable "waf_managed_rule_set" {
 variable "bedrock_llm_model" {
   description = "Bedrock LLM model to use (supports cross-region inference profiles)"
   type        = string
-  default     = "anthropic.claude-sonnet-4-5-20250929-v1:0"
+  default     = "global.anthropic.claude-sonnet-4-20250514-v1:0"
 
   validation {
     condition     = can(regex("^(us|eu|global|anthropic)\\.", var.bedrock_llm_model))
-    error_message = "Model ID must be a valid Bedrock model identifier (e.g., anthropic.claude-sonnet-4-5-20250929-v1:0)"
+    error_message = "Model ID must be a valid Bedrock model identifier or inference profile (e.g., global.anthropic.claude-sonnet-4-20250514-v1:0)"
   }
 }
 

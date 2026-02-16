@@ -1,7 +1,7 @@
 import requests
 import boto3
 import markdown_to_json
-from utils import logger
+from bedrock_utils import logger
 
 session = boto3.Session()
 ec2_client = session.client(service_name="ec2")

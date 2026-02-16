@@ -80,12 +80,14 @@ def lambda_handler(event, _):
         return {"statusCode": 500, "body": "Internal Server Error"}
 
     try:
-        if hcp_tf_use_waf == "True" and not contains_valid_cloudfront_signature(
-            event=event
-        ):
-            print_error("401 Unauthorized - Invalid CloudFront Signature", headers)
-            return {"statusCode": 401, "body": "Invalid CloudFront Signature"}
+        # CloudFront signature check (optional - only when header is present)
+        if hcp_tf_use_waf == "True":
+            cf_sig_header = event["headers"].get("x-cf-sig")
+            if cf_sig_header and not contains_valid_cloudfront_signature(event=event):
+                print_error("401 Unauthorized - Invalid CloudFront Signature", headers)
+                return {"statusCode": 401, "body": "Invalid CloudFront Signature"}
 
+        # HMAC signature check (always required)
         if not contains_valid_signature(event=event):
             print_error("401 Unauthorized - Invalid Payload Signature", headers)
             return {"statusCode": 401, "body": "Invalid Payload Signature"}

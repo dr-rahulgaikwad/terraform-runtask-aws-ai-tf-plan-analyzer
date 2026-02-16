@@ -42,9 +42,19 @@ resource "aws_lambda_function" "runtask_eventbridge" {
 
 resource "aws_lambda_function_url" "runtask_eventbridge" {
   function_name      = aws_lambda_function.runtask_eventbridge.function_name
-  authorization_type = "AWS_IAM"
+  authorization_type = var.deploy_waf == "true" ? "AWS_IAM" : "NONE"
+
+  cors {
+    allow_credentials = false
+    allow_origins     = ["*"]
+    allow_methods     = ["POST", "GET"]
+    allow_headers     = ["content-type", "x-tfc-task-signature", "x-amzn-trace-id"]
+    expose_headers    = ["x-amzn-requestid"]
+    max_age           = 86400
+  }
 }
 
+# Permission for CloudFront when WAF is enabled
 resource "aws_lambda_permission" "runtask_eventbridge" {
   count         = local.waf_deployment
   statement_id  = "AllowCloudFrontToFunctionUrl"
@@ -169,6 +179,7 @@ resource "aws_lambda_function" "runtask_fulfillment" {
   handler                        = "handler.lambda_handler"
   runtime                        = local.lambda_python_runtime
   timeout                        = local.lambda_default_timeout
+  memory_size                    = 1024  # Increased for AI analysis with tool orchestration
   reserved_concurrent_executions = local.lambda_reserved_concurrency
   tracing_config {
     mode = "Active"

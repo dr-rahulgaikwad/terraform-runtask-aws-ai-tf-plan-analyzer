@@ -12,8 +12,5 @@ build:
 	$(info ************ Starting Build: $(PROJECT) ************)
 	mkdir -p site-packages
 	cp *.* ./site-packages
-	mkdir -p build
-	python3.13 -m venv build/
-	. build/bin/activate; \
-	pip3 install  -r requirements.txt -t ./site-packages;
-	rm -rf build
+	pip3 install --platform manylinux2014_x86_64 --implementation cp --python-version 3.12 --only-binary=:all: -r requirements.txt -t ./site-packages
+
